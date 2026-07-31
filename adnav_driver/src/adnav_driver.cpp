@@ -1882,12 +1882,21 @@ void Driver::rawSensorsRosDecoder(an_packet_t* an_packet) {
 	// Fill the messages
 	if(decode_raw_sensors_packet(&raw_sensors_packet, an_packet) == 0) {
 
+		// ANPP packet 28 carries no time field (see raw_sensors_packet_t), so unlike
+		// the system state decoder there is no device time to copy. Host receive time
+		// is the only honest stamp available; its granularity is the read_us poll
+		// period. Taken once so all four messages below share it -- they come from
+		// one packet and describe one instant.
+		auto stamp = this->get_clock()->now();
+
 		// RAW MAGNETICFIELD VALUE FROM IMU
+		mag_field_msg_.header.stamp = stamp;
 		mag_field_msg_.header.frame_id = frame_id_;
 		mag_field_msg_.magnetic_field.x = raw_sensors_packet.magnetometers[0];
 		mag_field_msg_.magnetic_field.y = raw_sensors_packet.magnetometers[1];
 		mag_field_msg_.magnetic_field.z = raw_sensors_packet.magnetometers[2];
 
+		imu_raw_msg_.header.stamp = stamp;
 		imu_raw_msg_.header.frame_id = frame_id_;
 		imu_raw_msg_.orientation_covariance[0] = -1; // Tell recievers that no orientation is sent.
 		imu_raw_msg_.linear_acceleration.x = raw_sensors_packet.accelerometers[0];
@@ -1898,10 +1907,12 @@ void Driver::rawSensorsRosDecoder(an_packet_t* an_packet) {
 		imu_raw_msg_.angular_velocity.z = raw_sensors_packet.gyroscopes[2];
 
 		// BAROMETRIC PRESSURE
+		baro_msg_.header.stamp = stamp;
 		baro_msg_.header.frame_id = frame_id_;
 		baro_msg_.fluid_pressure = raw_sensors_packet.pressure;
 
 		// TEMPERATURE
+		temp_msg_.header.stamp = stamp;
 		temp_msg_.header.frame_id = frame_id_;
 		temp_msg_.temperature = raw_sensors_packet.pressure_temperature;
 
