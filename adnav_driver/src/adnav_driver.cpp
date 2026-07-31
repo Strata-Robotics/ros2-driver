@@ -537,7 +537,7 @@ void Driver::publishTimerCallback() {
 	if(!msg_write_done_) {
 		time = this->get_clock().get()->now().nanoseconds();
 		// Only wait until timeout. otherwise log error and exit callback.
-		if (msg_cv_.wait_for(lock, std::chrono::milliseconds(DEFAULT_TIMEOUT)) == std::cv_status::timeout) {
+		if (msg_cv_.wait_for(lock, std::chrono::milliseconds(DEFAULT_PUBLISH_TIMEOUT_MS)) == std::cv_status::timeout) {
 			RCLCPP_DEBUG(this->get_logger(), "Publish Timeout");
 			if(time) diff = this->get_clock().get()->now().nanoseconds() - time;
 			RCLCPP_DEBUG(this->get_logger(), "PubTimeout:\tAccess: %d\tTimeWait: %ld μs", pub_num_, diff/1000);
@@ -1341,7 +1341,7 @@ adnav_interfaces::msg::RawAcknowledge Driver::AcknowledgeHandler() {
 	// Wait for an acknowledge packet to be received.
 	std::unique_lock<std::mutex> lock(acknowledge_mutex_);
 	if(!acknowledge_recieve_) {
-		if(srv_cv_.wait_for(lock, std::chrono::seconds(DEFAULT_TIMEOUT)) == std::cv_status::timeout) {
+		if(srv_cv_.wait_for(lock, std::chrono::seconds(DEFAULT_ACK_TIMEOUT_S)) == std::cv_status::timeout) {
 			RCLCPP_ERROR(this->get_logger(), "acknowledgement Timeout");
 			msg.result++; // make error condition
 			return msg;
