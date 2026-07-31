@@ -113,6 +113,10 @@ constexpr const int    MIN_PACKET_PERIOD = 1;
 constexpr const int    MAX_PACKET_PERIOD = 65535;
 constexpr const int    MIN_PORT = 0;
 constexpr const int    MAX_PORT = 65535;
+// How many consecutive reads may decode nothing before the driver says so. At the
+// default read period this is a few seconds of silence -- long enough not to fire on
+// a slow start, short enough to notice a wrong baud rate.
+constexpr const int    DECODE_SILENCE_WARN_READS = 1000;
 
 typedef struct {
     bool en;
@@ -160,6 +164,14 @@ class Driver : public rclcpp::Node  // Inheriting gives every "this->" as a poin
     // ANPP Packet variables
     acknowledge_packet_t acknowledge_packet_;  // only access with protection of acknowledge_mutex_
     device_information_packet_t device_information_packet_;
+
+    // ANPP decode buffer. Persistent across reads because an_packet_decode retains
+    // the bytes of a partially received packet for the next call to complete.
+    // Touched only by the reading callback group, which is MutuallyExclusive, so it
+    // needs no mutex -- do not use it from any other callback group.
+    an_decoder_t an_decoder_;
+    uint64_t last_packets_decoded_ = 0;
+    int quiet_reads_ = 0;
 
     // Msgs. Only access with protection of messages_mutex_
     tf2::Quaternion                 orientation_;

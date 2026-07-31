@@ -70,6 +70,10 @@ Driver::Driver(): rclcpp::Node("adnav_driver"), msg_write_done_(false)
 	// Open a new ANPP Log file for data logging
 	anpp_logger_.openFile("Log_", ".anpp", log_path_);
 
+	// Initialised once, before anything can read into it, and never again: resetting
+	// it mid-run would discard a partially received packet and the decode statistics.
+	an_decoder_initialise(&an_decoder_);
+
 	// Open Communications with the device
 	communicator_ = std::make_unique<adnav::Communicator>(comms_data_);
 	communicator_->open();
@@ -111,10 +115,17 @@ Driver::~Driver() {
  * @brief Function to ask for device information from a Advanced navigation device and wait for its response.
  */
 void Driver::waitForDevicePacket() {
-	// initialize the decoder.
-	an_decoder_t an_decoder;
+	// Shares the member decoder with recievePackets. On a warm boot the device is
+	// already streaming its configured packets, so this loop consumes them alongside
+	// the device information packet it is waiting for; a local decoder would discard
+	// whatever partial packet was in flight when the loop exits, leaving the first
+	// steady-state read to begin mid-packet.
+	//
+	// Packets other than 3 are deliberately still dropped here rather than routed
+	// through decodePackets: the ROS publishers do not exist yet (createPublishers runs
+	// after this function), and the device information those decoders read for their
+	// message headers is exactly what this loop is still waiting for.
 	an_packet_t *an_packet;
-	an_decoder_initialise(&an_decoder);
 	bool recieved = false;
 	int bytes_received;
 
@@ -125,17 +136,17 @@ void Driver::waitForDevicePacket() {
 		requestDeviceInfo();
 
 		// Read in some data from the connection.
-		bytes_received = communicator_->read(an_decoder_pointer(&an_decoder), an_decoder_size(&an_decoder));
+		bytes_received = communicator_->read(an_decoder_pointer(&an_decoder_), an_decoder_size(&an_decoder_));
 
 		// Decode all data and act on only the device info data.
 		if (bytes_received > 0)
 		 {
-			anpp_logger_.writeAndIncrement((char*) an_decoder_pointer(&an_decoder), bytes_received);
+			anpp_logger_.writeAndIncrement((char*) an_decoder_pointer(&an_decoder_), bytes_received);
 
 			// Increment the decode buffer length by the number of bytes received
-			an_decoder_increment(&an_decoder, bytes_received);
+			an_decoder_increment(&an_decoder_, bytes_received);
 
-			while ((an_packet = an_packet_decode(&an_decoder)) != NULL)
+			while ((an_packet = an_packet_decode(&an_decoder_)) != NULL)
 			 {
 				RCLCPP_DEBUG(this->get_logger(), "[WaitForDevicePacket]ID: %d", an_packet->id);
 
@@ -509,15 +520,43 @@ void Driver::setupParams() {
  * This Function will also create a log file session and log incoming data to it.
  */
 void Driver::recievePackets() {
-	// initialize the decoder.
-	an_decoder_t an_decoder;
-	an_decoder_initialise(&an_decoder);
 	int bytes_received;
 
-	// get the bytes from the communication method, and load them into the decoder
-	bytes_received = communicator_->read(an_decoder_pointer(&an_decoder), an_decoder_size(&an_decoder));
+	// The decoder is a member, not a local: an_packet_decode leaves the bytes of a
+	// partially received packet at the front of the buffer for the next call to
+	// complete. A decoder created per call throws those away, so every packet
+	// straddling a read boundary is lost -- which at high packet rates is most of
+	// them, because a read lands mid-packet far more often than not.
+	if(an_decoder_size(&an_decoder_) == 0) {
+		// Unreachable in normal operation: a retained partial packet is bounded by
+		// AN_PACKET_HEADER_SIZE + AN_MAXIMUM_PACKET_SIZE, far below the buffer. Getting
+		// here means the buffer holds no decodable packet at all, so resync rather than
+		// call read() with a zero length and spin. buffer_length is reset directly to
+		// keep the library's own statistics monotonic across the event.
+		an_decoder_.bytes_discarded += an_decoder_.buffer_length;
+		an_decoder_.buffer_length = 0;
+		RCLCPP_ERROR_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+			"ANPP decode buffer full with no decodable packet. Resyncing.");
+		return;
+	}
 
-	decodePackets(an_decoder, bytes_received);
+	// get the bytes from the communication method, and load them into the decoder
+	bytes_received = communicator_->read(an_decoder_pointer(&an_decoder_), an_decoder_size(&an_decoder_));
+
+	decodePackets(an_decoder_, bytes_received);
+
+	// A wedged decoder produces silence rather than degraded output, so say so.
+	// Cleared by any successful decode.
+	if(an_decoder_.packets_decoded != last_packets_decoded_) {
+		last_packets_decoded_ = an_decoder_.packets_decoded;
+		quiet_reads_ = 0;
+	}else if(++quiet_reads_ % DECODE_SILENCE_WARN_READS == 0) {
+		RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+			"No ANPP packet decoded in %d reads. Check the baud rate and cabling. "
+			"CRC errors: %lu, LRC errors: %lu, bytes discarded: %lu",
+			DECODE_SILENCE_WARN_READS, an_decoder_.crc_errors, an_decoder_.lrc_errors,
+			an_decoder_.bytes_discarded);
+	}
 }
 
 /**
