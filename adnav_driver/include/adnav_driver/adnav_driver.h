@@ -106,7 +106,12 @@ constexpr const char * DEFAULT_PACKET_REQUEST_STR = "20, 10, 28, 10";
 constexpr const char * DEFAULT_IP_ADDRESS = "0.0.0.0";
 constexpr const bool   DEFAULT_NTRIP_STATE = false;
 constexpr const int    DEFAULT_GPGGA_REPORT_PERIOD = 1;  // Second(s)
-constexpr const int    DEFAULT_TIMEOUT = 5;
+// Two different waits, two different units. The publish handshake gives up after a
+// few milliseconds because it runs per publish tick; the configuration acknowledgement
+// waits seconds because it is a device round trip. They were one constant named
+// DEFAULT_TIMEOUT, which read as a single 5-something at both use sites.
+constexpr const int    DEFAULT_PUBLISH_TIMEOUT_MS = 5;
+constexpr const int    DEFAULT_ACK_TIMEOUT_S = 5;
 constexpr const int    MAX_TIMER_PERIOD = 65535;
 constexpr const int    MIN_TIMER_PERIOD = 1000;
 constexpr const int    MIN_PACKET_PERIOD = 1;
