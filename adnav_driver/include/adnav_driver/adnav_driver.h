@@ -122,6 +122,12 @@ constexpr const int    MAX_PORT = 65535;
 // default read period this is a few seconds of silence -- long enough not to fire on
 // a slow start, short enough to notice a wrong baud rate.
 constexpr const int    DECODE_SILENCE_WARN_READS = 1000;
+// publish_mode values. TIMER is the default and the historical behaviour: every topic
+// is republished on a publish_us timer regardless of which packet arrived. ON_DECODE
+// publishes each topic from the decoder of the packet that owns it, so a sample is
+// published exactly once, at the rate the device actually sends it.
+constexpr const char * PUBLISH_MODE_TIMER = "timer";
+constexpr const char * PUBLISH_MODE_ON_DECODE = "on_decode";
 
 typedef struct {
     bool en;
@@ -177,6 +183,10 @@ class Driver : public rclcpp::Node  // Inheriting gives every "this->" as a poin
     an_decoder_t an_decoder_;
     uint64_t last_packets_decoded_ = 0;
     int quiet_reads_ = 0;
+
+    // One of PUBLISH_MODE_TIMER / PUBLISH_MODE_ON_DECODE. Read-only parameter, so it
+    // is set once in setupParamService and never changes.
+    std::string publish_mode_;
 
     // Msgs. Only access with protection of messages_mutex_
     tf2::Quaternion                 orientation_;
@@ -263,6 +273,10 @@ class Driver : public rclcpp::Node  // Inheriting gives every "this->" as a poin
     //~~~~~~ Control Functions
     void recievePackets();
     void publishTimerCallback();
+    // Both require messages_mutex_ to be held by the caller. Split by owning packet so
+    // the timer path and the on-decode path cannot drift apart.
+    void publishSystemStateMsgs();
+    void publishRawSensorMsgs();
     void RestartPublisher();
     void RestartReader();
 

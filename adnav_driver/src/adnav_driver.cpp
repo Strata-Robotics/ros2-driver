@@ -57,9 +57,12 @@ Driver::Driver(): rclcpp::Node("adnav_driver"), msg_write_done_(false)
 	node_name_ = this->get_name();
 	RCLCPP_INFO(this->get_logger(), "\nNamespace: %s\n", node_name_.c_str());
 
-	// Create timers for callbacks
-	publish_timer_ = this->create_wall_timer(
-      	publish_timer_interval_ , std::bind(&Driver::publishTimerCallback, this), publishing_group_);
+	// Create timers for callbacks. In on-decode mode there is no publish timer at
+	// all -- the decoders publish what they just filled in.
+	if(publish_mode_ == PUBLISH_MODE_TIMER) {
+		publish_timer_ = this->create_wall_timer(
+      		publish_timer_interval_ , std::bind(&Driver::publishTimerCallback, this), publishing_group_);
+	}
 
 	read_timer_ = this->create_wall_timer(
 		read_timer_interval_, std::bind(&Driver::recievePackets, this), reading_group_);
@@ -397,7 +400,29 @@ void Driver::setupParams() {
 		}
 	}
 
-
+	// Publish mode. Read-only: switching at runtime would mean creating or destroying
+	// the publish timer underneath a callback that may be mid-wait on it, and there is
+	// no use case that needs it.
+	rcl_interfaces::msg::ParameterDescriptor publish_mode_description = rcl_interfaces::msg::ParameterDescriptor();
+	ss <<	"How ROS messages are published.\n" <<
+			"  " << PUBLISH_MODE_TIMER << ": on a publish_us timer, all topics together (default).\n" <<
+			"  " << PUBLISH_MODE_ON_DECODE << ": as each ANPP packet is decoded, publishing only the\n" <<
+			"             topics that packet owns. Every sample is published exactly once,\n" <<
+			"             at the device's own packet rate, and publish_us is unused.";
+	publish_mode_description.description = ss.str();
+	ss.str(""); // empty the stream
+	publish_mode_description.name = "publish_mode";
+	publish_mode_description.read_only = true;
+	ss <<	"One of: " << PUBLISH_MODE_TIMER << ", " << PUBLISH_MODE_ON_DECODE;
+	publish_mode_description.additional_constraints = ss.str();
+	ss.str(""); // empty the stream
+	this->declare_parameter<std::string>("publish_mode", PUBLISH_MODE_TIMER, publish_mode_description);
+	publish_mode_ = this->get_parameter("publish_mode").as_string();
+	if(publish_mode_ != PUBLISH_MODE_TIMER && publish_mode_ != PUBLISH_MODE_ON_DECODE) {
+		RCLCPP_ERROR(this->get_logger(), "Invalid publish_mode '%s'. Setting to default: %s",
+			publish_mode_.c_str(), PUBLISH_MODE_TIMER);
+		publish_mode_ = PUBLISH_MODE_TIMER;
+	}
 
 	// Request packet array
 	rcl_interfaces::msg::ParameterDescriptor packet_request_description = rcl_interfaces::msg::ParameterDescriptor();
@@ -589,16 +614,8 @@ void Driver::publishTimerCallback() {
 	RCLCPP_DEBUG(this->get_logger(), "Pub: \t\tMutex: L\tAccess: %d\tTimeWait: %ld μs", pub_num_, diff/1000);
 
 	// PUBLISH MESSAGES
-	nav_sat_fix_pub_->publish(nav_fix_msg_);
-	twist_pub_->publish(twist_msg_);
-	imu_pub_->publish(imu_msg_);
-	imu_raw_pub_->publish(imu_raw_msg_);
-	system_status_pub_->publish(system_status_msg_);
-	filter_status_pub_->publish(filter_status_msg_);
-	magnetic_field_pub_->publish(mag_field_msg_);
-	barometric_pressure_pub_->publish(baro_msg_);
-	temperature_pub_->publish(temp_msg_);
-	pose_pub_->publish(pose_msg_);
+	publishSystemStateMsgs();
+	publishRawSensorMsgs();
 
 	RCLCPP_DEBUG(this->get_logger(), "Pub: \t\tMutex: U\tAccess: %d", pub_num_++);
 
@@ -607,9 +624,41 @@ void Driver::publishTimerCallback() {
 }
 
 /**
+ * @brief Publishes the messages owned by the system state packet (ANPP 20).
+ *
+ * Caller must hold messages_mutex_.
+ */
+void Driver::publishSystemStateMsgs() {
+	nav_sat_fix_pub_->publish(nav_fix_msg_);
+	twist_pub_->publish(twist_msg_);
+	imu_pub_->publish(imu_msg_);
+	system_status_pub_->publish(system_status_msg_);
+	filter_status_pub_->publish(filter_status_msg_);
+	pose_pub_->publish(pose_msg_);
+}
+
+/**
+ * @brief Publishes the messages owned by the raw sensors packet (ANPP 28).
+ *
+ * Caller must hold messages_mutex_.
+ */
+void Driver::publishRawSensorMsgs() {
+	imu_raw_pub_->publish(imu_raw_msg_);
+	magnetic_field_pub_->publish(mag_field_msg_);
+	barometric_pressure_pub_->publish(baro_msg_);
+	temperature_pub_->publish(temp_msg_);
+}
+
+/**
  * @brief Function to cancel and restart the Publisher timer.
  */
 void Driver::RestartPublisher() {
+	if(publish_mode_ != PUBLISH_MODE_TIMER) {
+		RCLCPP_INFO(this->get_logger(),
+			"publish_mode is on_decode; publish_us has no effect and there is no timer to restart.");
+		return;
+	}
+
 	RCLCPP_INFO(this->get_logger(), "Restart Publisher Timer");
 
 	// Cancel old timer to stop callbacks from triggering while remaking timer.
@@ -1836,6 +1885,11 @@ void Driver::systemStateRosDecoder(an_packet_t* an_packet) {
 	// Now that work is complete notify an update for the publisher.
 	msg_write_done_ = true;
 	msg_cv_.notify_one();
+
+	// In on-decode mode this packet's own topics go out now, exactly once per packet,
+	// rather than waiting for a timer that may fire twice before the next packet
+	// arrives or not at all between two of them.
+	if(publish_mode_ == PUBLISH_MODE_ON_DECODE) publishSystemStateMsgs();
 	auto diff = this->get_clock().get()->now().nanoseconds() - time;
 	RCLCPP_DEBUG(this->get_logger(), "Packet 20:\tMutex: U\tAccess: %d\tTimeLocked: %ld μs", P20_num_++, diff/1000);
 }
@@ -1959,6 +2013,8 @@ void Driver::rawSensorsRosDecoder(an_packet_t* an_packet) {
 	// Now that work is complete notify an update for the publisher.
 	msg_write_done_ = true;
 	msg_cv_.notify_one();
+
+	if(publish_mode_ == PUBLISH_MODE_ON_DECODE) publishRawSensorMsgs();
 	// RCLCPP_DEBUG(this->get_logger(), "Raw: \tNotifying Complete\t%d", raw_num_++);
 
 	auto diff = this->get_clock().get()->now().nanoseconds() - time;
