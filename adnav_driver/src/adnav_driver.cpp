@@ -1844,11 +1844,13 @@ void Driver::systemStateRosDecoder(an_packet_t* an_packet) {
 			else {
 				ss << "\n10. Dual Antenna Heading NOT Active.";
 			}
+			// 11, 13, 14 and 16 are features Strata does not use, so their absence is not a
+			// warning. It stays in the diagnostic message.
 			if (system_state_packet.filter_status.b.velocity_heading_enabled) {
 				filter_status_msg_.message += "\n11. Velocity Heading Enabled.";
 			}
 			else {
-				ss << "\n11. Velocity Heading NOT Enabled.";
+				filter_status_msg_.message += "\n11. Velocity Heading NOT Enabled.";
 			}
 			if (system_state_packet.filter_status.b.atmospheric_altitude_enabled) {
 				filter_status_msg_.message += "\n12. Atmospheric Altitude Enabled.";
@@ -1860,19 +1862,19 @@ void Driver::systemStateRosDecoder(an_packet_t* an_packet) {
 				filter_status_msg_.message += "\n13. External Position Active.";
 			}
 			else {
-				ss << "\n13. External Position NOT Active.";
+				filter_status_msg_.message += "\n13. External Position NOT Active.";
 			}
 			if (system_state_packet.filter_status.b.external_velocity_active) {
 				filter_status_msg_.message += "\n14. External Velocity Active.";
 			}
 			else {
-				ss << "\n14. External Velocity NOT Active.";
+				filter_status_msg_.message += "\n14. External Velocity NOT Active.";
 			}
 			if (system_state_packet.filter_status.b.external_heading_active) {
 				filter_status_msg_.message += "\n15. External Heading Active.";
 			}
 			else {
-				ss << "\n16. External Heading NOT Active.";
+				filter_status_msg_.message += "\n16. External Heading NOT Active.";
 			}
 
 			// If a warning has occued log it
