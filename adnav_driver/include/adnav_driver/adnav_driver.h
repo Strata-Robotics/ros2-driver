@@ -277,6 +277,12 @@ class Driver : public rclcpp::Node  // Inheriting gives every "this->" as a poin
     // the timer path and the on-decode path cannot drift apart.
     void publishSystemStateMsgs();
     void publishRawSensorMsgs();
+    // Skips a topic nothing reads: ten topics at 200 Hz cost CPU on the decode path.
+    // A subscriber that appears later, such as `ros2 topic echo`, gets data at once.
+    template <typename PublisherT, typename MsgT>
+    static void publishIfSubscribed(const PublisherT& pub, const MsgT& msg) {
+        if (pub->get_subscription_count() > 0) pub->publish(msg);
+    }
     void RestartPublisher();
     void RestartReader();
 

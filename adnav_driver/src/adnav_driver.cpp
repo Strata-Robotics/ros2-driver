@@ -629,12 +629,12 @@ void Driver::publishTimerCallback() {
  * Caller must hold messages_mutex_.
  */
 void Driver::publishSystemStateMsgs() {
-	nav_sat_fix_pub_->publish(nav_fix_msg_);
-	twist_pub_->publish(twist_msg_);
-	imu_pub_->publish(imu_msg_);
-	system_status_pub_->publish(system_status_msg_);
-	filter_status_pub_->publish(filter_status_msg_);
-	pose_pub_->publish(pose_msg_);
+	publishIfSubscribed(nav_sat_fix_pub_, nav_fix_msg_);
+	publishIfSubscribed(twist_pub_, twist_msg_);
+	publishIfSubscribed(imu_pub_, imu_msg_);
+	publishIfSubscribed(system_status_pub_, system_status_msg_);
+	publishIfSubscribed(filter_status_pub_, filter_status_msg_);
+	publishIfSubscribed(pose_pub_, pose_msg_);
 }
 
 /**
@@ -643,10 +643,10 @@ void Driver::publishSystemStateMsgs() {
  * Caller must hold messages_mutex_.
  */
 void Driver::publishRawSensorMsgs() {
-	imu_raw_pub_->publish(imu_raw_msg_);
-	magnetic_field_pub_->publish(mag_field_msg_);
-	barometric_pressure_pub_->publish(baro_msg_);
-	temperature_pub_->publish(temp_msg_);
+	publishIfSubscribed(imu_raw_pub_, imu_raw_msg_);
+	publishIfSubscribed(magnetic_field_pub_, mag_field_msg_);
+	publishIfSubscribed(barometric_pressure_pub_, baro_msg_);
+	publishIfSubscribed(temperature_pub_, temp_msg_);
 }
 
 /**
