@@ -291,6 +291,24 @@ class Driver : public rclcpp::Node  // Inheriting gives every "this->" as a poin
     void statusErrLog(const std::string& errmsg);
     void statusWarnLog(const std::string& warnmsg);
 
+    // The device repeats its status in every system state packet. A status prints in full
+    // when it changes, then one line every kStatusRepeat s while it lasts.
+    struct StatusLog {
+        std::string text;           // the status last printed in full, "" while clear
+        double printed_at = 0.0;    // steady seconds
+        long repeats = 0;           // packets since the last line
+        long reported = 0;          // the count a summary line carries
+        double clear_since = -1.0;  // steady seconds the status has read clear, -1 while set
+    };
+    static constexpr double kStatusRepeat = 60.0;
+    static constexpr double kStatusClearHold = 5.0;  // [s] clear before a return prints again
+    // 0: quiet, 1: print in full, 2: print one summary line.
+    int statusRepeat(StatusLog& log, const std::string& msg);
+    void statusClear(StatusLog& log, const char* what);
+    static std::string oneLine(const std::string& text);
+    static double steadySeconds();
+    StatusLog err_log_, warn_log_;
+
     //~~~~~~ ROS Services
     void srvPacketPeriods(const std::shared_ptr<adnav_interfaces::srv::PacketPeriods::Request> request,
             std::shared_ptr<adnav_interfaces::srv::PacketPeriods::Response> response);

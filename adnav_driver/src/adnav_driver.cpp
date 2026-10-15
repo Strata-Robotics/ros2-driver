@@ -696,7 +696,12 @@ void Driver::statusErrLog(const std::string& errmsg) {
 
 	system_status_msg_.level = 2; // ERROR state
 	system_status_msg_.message += errmsg;
-	RCLCPP_ERROR_THROTTLE(this->get_logger(), *this->get_clock(), 10000, errmsg.c_str());
+	switch (statusRepeat(err_log_, errmsg)) {
+		case 1: RCLCPP_ERROR(this->get_logger(), "%s", errmsg.c_str()); break;
+		case 2: RCLCPP_ERROR(this->get_logger(), "system status unchanged (%ld packets): %s",
+				err_log_.reported, oneLine(errmsg).c_str()); break;
+		default: break;
+	}
 }
 
 /**
@@ -710,7 +715,71 @@ void Driver::statusWarnLog(const std::string& warnmsg) {
 
 	filter_status_msg_.level = diagnostic_msgs::msg::DiagnosticStatus::WARN; // WARN state
 	filter_status_msg_.message += warnmsg;
-	RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 10000, warnmsg.c_str());
+	switch (statusRepeat(warn_log_, warnmsg)) {
+		case 1: RCLCPP_WARN(this->get_logger(), "%s", warnmsg.c_str()); break;
+		case 2: RCLCPP_WARN(this->get_logger(), "filter status unchanged (%ld packets): %s",
+				warn_log_.reported, oneLine(warnmsg).c_str()); break;
+		default: break;
+	}
+}
+
+/**
+ * @brief Decides whether a repeated status prints: in full on a change, else one line every kStatusRepeat s.
+ *
+ * @return 1 to print in full, 2 to print a summary line, 0 to stay quiet. On 2, log.reported holds the count.
+ */
+int Driver::statusRepeat(StatusLog& log, const std::string& msg) {
+	const double now = steadySeconds();
+	log.clear_since = -1.0;
+	if (msg != log.text) {
+		log.text = msg;
+		log.printed_at = now;
+		log.repeats = 0;
+		return 1;
+	}
+	log.repeats++;
+	if (now - log.printed_at >= kStatusRepeat) {
+		log.printed_at = now;
+		log.reported = log.repeats;
+		log.repeats = 0;
+		return 2;
+	}
+	return 0;
+}
+
+/**
+ * @brief Forgets a status clear for kStatusClearHold s, so its return prints in full at once.
+ *
+ * A status that flickers stays one status, counted, rather than a full print per packet.
+ */
+void Driver::statusClear(StatusLog& log, const char* what) {
+	if (log.text.empty()) return;
+	const double now = steadySeconds();
+	if (log.clear_since < 0.0) {
+		log.clear_since = now;
+	} else if (now - log.clear_since >= kStatusClearHold) {
+		RCLCPP_INFO(this->get_logger(), "%s status clear (%ld packets since the last line)",
+			what, log.repeats);
+		log = StatusLog();
+	}
+}
+
+double Driver::steadySeconds() {
+	return std::chrono::duration<double>(
+		std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+/**
+ * @brief A multi-line status on one line, its items joined by "; ".
+ */
+std::string Driver::oneLine(const std::string& text) {
+	std::string out;
+	std::istringstream lines(text);
+	for (std::string line; std::getline(lines, line);) {
+		if (line.empty()) continue;
+		out += (out.empty() ? "" : "; ") + line;
+	}
+	return out;
 }
 
 //~~~~~~ Service Functions
@@ -1790,6 +1859,8 @@ void Driver::systemStateRosDecoder(an_packet_t* an_packet) {
 				statusErrLog(ss.str());
 				// empty the stringstream
 				ss.str("");
+			} else {
+				statusClear(err_log_, "system");
 			}
 
 			// FILTER STATUS
@@ -1882,6 +1953,8 @@ void Driver::systemStateRosDecoder(an_packet_t* an_packet) {
 				ss << std::endl;
 				statusWarnLog(ss.str());
 				ss.str("");
+			} else {
+				statusClear(warn_log_, "filter");
 			}
 	}
 	// Now that work is complete notify an update for the publisher.
